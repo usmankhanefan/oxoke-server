@@ -17,7 +17,6 @@ app.use(express.json());
 // ==============================
 function loadData() {
   if (!fs.existsSync(DATA_FILE)) {
-    // First run: copy seed file
     const seedFile = path.join(__dirname, 'codes_seed.json');
     if (fs.existsSync(seedFile)) {
       fs.copyFileSync(seedFile, DATA_FILE);
@@ -32,37 +31,39 @@ function saveData(data) {
   fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
 }
 
-// Browser ID hashing for privacy
-function hashBrowserId(id) {
+function hashId(id) {
   return crypto.createHash('sha256').update(id).digest('hex').substring(0, 16);
 }
 
 // ==============================
-// ROUTES
+// HEALTH CHECK
 // ==============================
-
-// Health check
 app.get('/', (req, res) => {
-  res.json({ status: 'OXOKE Activation Server Running', version: '1.0.0' });
+  res.json({ status: 'OXOKE Activation Server Running', version: '2.0.0' });
 });
 
-// POST /api/activate — Activate a code for a browser
+// ==============================
+// POST /api/activate
+// ==============================
 app.post('/api/activate', (req, res) => {
-  const { code, browser_id } = req.body;
+  const { code, browser_id, hardware_id } = req.body;
 
   if (!code || !browser_id) {
     return res.status(400).json({ success: false, message: 'Missing code or browser_id' });
   }
 
   const normalizedCode = code.toUpperCase().trim();
-  const hashedBrowser = hashBrowserId(browser_id);
+  const hashedBrowser = hashId(browser_id);
+  // hardware_id হলো শুধু hardware fingerprint — reinstall এ একই থাকে
+  const hashedHardware = hardware_id ? hashId(hardware_id) : hashedBrowser;
+
   const data = loadData();
   const codeData = data.activation_codes[normalizedCode];
 
   if (!codeData) {
     return res.status(404).json({
       success: false,
-      message: 'Invalid activation code. Please contact us on WhatsApp: +8801811507607'
+      message: 'Invalid activation code. Contact: +8801811507607'
     });
   }
 
@@ -73,8 +74,16 @@ app.post('/api/activate', (req, res) => {
     });
   }
 
-  // Already registered on this browser?
-  if (codeData.browsers.includes(hashedBrowser)) {
+  // browsers array আগে ছিল string, এখন object — migrate করি
+  if (!codeData.browsers) codeData.browsers = [];
+  codeData.browsers = codeData.browsers.map(b => {
+    if (typeof b === 'string') return { bid: b, hwid: b };
+    return b;
+  });
+
+  // ১. এই exact browser_id আগে registered ছিল?
+  const exactMatch = codeData.browsers.find(b => b.bid === hashedBrowser);
+  if (exactMatch) {
     return res.json({
       success: true,
       message: 'Already activated on this browser.',
@@ -83,7 +92,24 @@ app.post('/api/activate', (req, res) => {
     });
   }
 
-  // Check max browser limit
+  // ২. Same hardware_id আগে registered ছিল? (reinstall detect)
+  const hardwareMatch = codeData.browsers.find(b => b.hwid === hashedHardware);
+  if (hardwareMatch) {
+    // Reinstall detected! পুরনো browser_id টা নতুনটা দিয়ে replace করি
+    hardwareMatch.bid = hashedBrowser;
+    hardwareMatch.hwid = hashedHardware;
+    hardwareMatch.reinstalled_at = new Date().toISOString();
+    codeData.last_activated = new Date().toISOString();
+    saveData(data);
+    return res.json({
+      success: true,
+      message: 'Reinstall detected. Reactivated successfully!',
+      browsers_used: codeData.browsers.length,
+      max_browsers: codeData.max_browsers
+    });
+  }
+
+  // ৩. সম্পূর্ণ নতুন browser — limit চেক করি
   if (codeData.browsers.length >= codeData.max_browsers) {
     return res.status(403).json({
       success: false,
@@ -91,8 +117,12 @@ app.post('/api/activate', (req, res) => {
     });
   }
 
-  // Register browser
-  codeData.browsers.push(hashedBrowser);
+  // ৪. নতুন browser add করি
+  codeData.browsers.push({
+    bid: hashedBrowser,
+    hwid: hashedHardware,
+    activated_at: new Date().toISOString()
+  });
   codeData.last_activated = new Date().toISOString();
   saveData(data);
 
@@ -104,64 +134,75 @@ app.post('/api/activate', (req, res) => {
   });
 });
 
-// POST /api/verify — Verify existing activation is still valid
+// ==============================
+// POST /api/verify
+// ==============================
 app.post('/api/verify', (req, res) => {
-  const { code, browser_id } = req.body;
-
-  if (!code || !browser_id) {
-    return res.status(400).json({ valid: false });
-  }
+  const { code, browser_id, hardware_id } = req.body;
+  if (!code || !browser_id) return res.json({ valid: false });
 
   const normalizedCode = code.toUpperCase().trim();
-  const hashedBrowser = hashBrowserId(browser_id);
+  const hashedBrowser = hashId(browser_id);
+  const hashedHardware = hardware_id ? hashId(hardware_id) : hashedBrowser;
   const data = loadData();
   const codeData = data.activation_codes[normalizedCode];
 
-  if (!codeData || !codeData.active) {
-    return res.json({ valid: false, message: 'Code is no longer valid.' });
-  }
+  if (!codeData || !codeData.active) return res.json({ valid: false });
 
-  const registered = codeData.browsers.includes(hashedBrowser);
+  if (!codeData.browsers) return res.json({ valid: false });
+
+  // Migrate old string format
+  codeData.browsers = codeData.browsers.map(b => {
+    if (typeof b === 'string') return { bid: b, hwid: b };
+    return b;
+  });
+
+  const exactMatch = codeData.browsers.find(b => b.bid === hashedBrowser);
+  const hwMatch = codeData.browsers.find(b => b.hwid === hashedHardware);
+
   return res.json({
-    valid: registered,
+    valid: !!(exactMatch || hwMatch),
     browsers_used: codeData.browsers.length,
     max_browsers: codeData.max_browsers
   });
 });
 
-// POST /api/deactivate — Remove a browser from a code
+// ==============================
+// POST /api/deactivate
+// ==============================
 app.post('/api/deactivate', (req, res) => {
-  const { code, browser_id } = req.body;
+  const { code, browser_id, hardware_id } = req.body;
   if (!code || !browser_id) return res.status(400).json({ success: false });
 
   const normalizedCode = code.toUpperCase().trim();
-  const hashedBrowser = hashBrowserId(browser_id);
+  const hashedBrowser = hashId(browser_id);
+  const hashedHardware = hardware_id ? hashId(hardware_id) : hashedBrowser;
   const data = loadData();
   const codeData = data.activation_codes[normalizedCode];
 
   if (!codeData) return res.status(404).json({ success: false });
 
-  codeData.browsers = codeData.browsers.filter(b => b !== hashedBrowser);
-  saveData(data);
+  codeData.browsers = (codeData.browsers || []).map(b => {
+    if (typeof b === 'string') return { bid: b, hwid: b };
+    return b;
+  }).filter(b => b.bid !== hashedBrowser && b.hwid !== hashedHardware);
 
+  saveData(data);
   return res.json({ success: true, message: 'Browser deactivated.' });
 });
 
 // ==============================
-// ADMIN ROUTES (Protected)
+// ADMIN ROUTES
 // ==============================
-
-// GET /admin/codes — List all codes
 app.get('/admin/codes', (req, res) => {
-  if (req.headers['x-admin-key'] !== ADMIN_KEY) {
-    return res.status(403).json({ error: 'Unauthorized' });
-  }
+  if (req.headers['x-admin-key'] !== ADMIN_KEY) return res.status(403).json({ error: 'Unauthorized' });
   const data = loadData();
   const summary = {};
   for (const [code, info] of Object.entries(data.activation_codes)) {
+    const browsers = (info.browsers || []).map(b => typeof b === 'string' ? { bid: b, hwid: b } : b);
     summary[code] = {
       active: info.active,
-      browsers_used: info.browsers.length,
+      browsers_used: browsers.length,
       max_browsers: info.max_browsers,
       created: info.created,
       last_activated: info.last_activated || null
@@ -170,69 +211,44 @@ app.get('/admin/codes', (req, res) => {
   res.json({ total: Object.keys(summary).length, codes: summary });
 });
 
-// POST /admin/add-code — Add a new code
 app.post('/admin/add-code', (req, res) => {
-  if (req.headers['x-admin-key'] !== ADMIN_KEY) {
-    return res.status(403).json({ error: 'Unauthorized' });
-  }
+  if (req.headers['x-admin-key'] !== ADMIN_KEY) return res.status(403).json({ error: 'Unauthorized' });
   const { code, max_browsers } = req.body;
   if (!code) return res.status(400).json({ error: 'Code required' });
-
   const data = loadData();
   const normalizedCode = code.toUpperCase().trim();
-
-  if (data.activation_codes[normalizedCode]) {
-    return res.status(409).json({ error: 'Code already exists' });
-  }
-
+  if (data.activation_codes[normalizedCode]) return res.status(409).json({ error: 'Code already exists' });
   data.activation_codes[normalizedCode] = {
-    active: true,
-    browsers: [],
-    max_browsers: max_browsers || 3,
+    active: true, browsers: [], max_browsers: max_browsers || 3,
     created: new Date().toISOString().split('T')[0]
   };
   saveData(data);
   res.json({ success: true, code: normalizedCode });
 });
 
-// POST /admin/disable-code — Disable a code
 app.post('/admin/disable-code', (req, res) => {
-  if (req.headers['x-admin-key'] !== ADMIN_KEY) {
-    return res.status(403).json({ error: 'Unauthorized' });
-  }
+  if (req.headers['x-admin-key'] !== ADMIN_KEY) return res.status(403).json({ error: 'Unauthorized' });
   const { code } = req.body;
   const data = loadData();
   const normalizedCode = code.toUpperCase().trim();
-
-  if (!data.activation_codes[normalizedCode]) {
-    return res.status(404).json({ error: 'Code not found' });
-  }
-
+  if (!data.activation_codes[normalizedCode]) return res.status(404).json({ error: 'Not found' });
   data.activation_codes[normalizedCode].active = false;
   saveData(data);
-  res.json({ success: true, message: `Code ${normalizedCode} disabled.` });
+  res.json({ success: true });
 });
 
-// POST /admin/reset-browsers — Reset browser list for a code
 app.post('/admin/reset-browsers', (req, res) => {
-  if (req.headers['x-admin-key'] !== ADMIN_KEY) {
-    return res.status(403).json({ error: 'Unauthorized' });
-  }
+  if (req.headers['x-admin-key'] !== ADMIN_KEY) return res.status(403).json({ error: 'Unauthorized' });
   const { code } = req.body;
   const data = loadData();
   const normalizedCode = code.toUpperCase().trim();
-
-  if (!data.activation_codes[normalizedCode]) {
-    return res.status(404).json({ error: 'Code not found' });
-  }
-
+  if (!data.activation_codes[normalizedCode]) return res.status(404).json({ error: 'Not found' });
   data.activation_codes[normalizedCode].browsers = [];
   saveData(data);
   res.json({ success: true, message: `Browsers reset for ${normalizedCode}` });
 });
 
 app.listen(PORT, () => {
-  console.log(`\n🚀 OXOKE Activation Server running on port ${PORT}`);
-  console.log(`📊 Admin Key: ${ADMIN_KEY}`);
-  console.log(`🌐 Endpoints: /api/activate | /api/verify | /api/deactivate`);
+  console.log(`\n🚀 OXOKE Activation Server v2.0 running on port ${PORT}`);
+  console.log(`✅ Reinstall detection: ENABLED`);
 });
