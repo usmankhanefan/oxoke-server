@@ -14,8 +14,8 @@ app.use(express.json());
 
 function loadData() {
   if (!fs.existsSync(DATA_FILE)) {
-    const seedFile = path.join(__dirname, 'codes_seed.json');
-    if (fs.existsSync(seedFile)) fs.copyFileSync(seedFile, DATA_FILE);
+    const seed = path.join(__dirname, 'codes_seed.json');
+    if (fs.existsSync(seed)) fs.copyFileSync(seed, DATA_FILE);
     else fs.writeFileSync(DATA_FILE, JSON.stringify({ activation_codes: {} }, null, 2));
   }
   return JSON.parse(fs.readFileSync(DATA_FILE, 'utf-8'));
@@ -26,11 +26,12 @@ function saveData(data) {
 }
 
 function hashId(id) {
-  return crypto.createHash('sha256').update(String(id)).digest('hex').substring(0, 16);
+  return crypto.createHash('sha256').update(String(id)).digest('hex').slice(0, 16);
 }
 
+// Health check
 app.get('/', (req, res) => {
-  res.json({ status: 'OXOKE Activation Server Running', version: '3.0.0' });
+  res.json({ status: 'OXOKE Activation Server Running', version: '4.0.0' });
 });
 
 // ==============================
@@ -38,66 +39,36 @@ app.get('/', (req, res) => {
 // ==============================
 app.post('/api/activate', (req, res) => {
   const { code, browser_id } = req.body;
+  if (!code || !browser_id) return res.status(400).json({ success: false, message: 'Missing fields' });
 
-  if (!code || !browser_id) {
-    return res.status(400).json({ success: false, message: 'Missing code or browser_id' });
-  }
-
-  const normalizedCode = code.toUpperCase().trim();
-  const hashedBrowser = hashId(browser_id);
+  const nc = code.toUpperCase().trim();
+  const hb = hashId(browser_id);
   const data = loadData();
-  const codeData = data.activation_codes[normalizedCode];
+  const cd = data.activation_codes[nc];
 
-  if (!codeData) {
-    return res.status(404).json({
-      success: false,
-      message: 'Invalid activation code. Contact: +8801811507607'
-    });
+  if (!cd) return res.status(404).json({ success: false, message: 'Invalid activation code. Contact: +8801811507607' });
+  if (!cd.active) return res.status(403).json({ success: false, message: 'Code disabled. Contact: +8801811507607' });
+
+  if (!cd.browsers) cd.browsers = [];
+
+  // এই browser আগে activate হয়েছিল?
+  if (cd.browsers.includes(hb)) {
+    return res.json({ success: true, message: 'Already activated.', browsers_used: cd.browsers.length, max_browsers: cd.max_browsers });
   }
-  if (!codeData.active) {
+
+  // Limit check
+  if (cd.browsers.length >= cd.max_browsers) {
     return res.status(403).json({
       success: false,
-      message: 'This code has been disabled. Contact: +8801811507607'
+      message: `Maximum browser limit reached (${cd.max_browsers} browsers). Contact: +8801811507607`
     });
   }
 
-  if (!codeData.browsers) codeData.browsers = [];
-
-  // Migrate old object format to simple string array
-  codeData.browsers = codeData.browsers.map(b => {
-    if (typeof b === 'object' && b.bid) return b.bid;
-    return b;
-  });
-
-  // এই browser আগে registered?
-  if (codeData.browsers.includes(hashedBrowser)) {
-    return res.json({
-      success: true,
-      message: 'Already activated on this browser.',
-      browsers_used: codeData.browsers.length,
-      max_browsers: codeData.max_browsers
-    });
-  }
-
-  // নতুন browser — limit চেক
-  if (codeData.browsers.length >= codeData.max_browsers) {
-    return res.status(403).json({
-      success: false,
-      message: `Maximum browser limit reached (${codeData.max_browsers} browsers). Contact: +8801811507607`
-    });
-  }
-
-  // Add করি
-  codeData.browsers.push(hashedBrowser);
-  codeData.last_activated = new Date().toISOString();
+  cd.browsers.push(hb);
+  cd.last_activated = new Date().toISOString();
   saveData(data);
 
-  return res.json({
-    success: true,
-    message: 'Activation successful! Welcome to OXOKE Ads Blocker.',
-    browsers_used: codeData.browsers.length,
-    max_browsers: codeData.max_browsers
-  });
+  return res.json({ success: true, message: 'Activation successful!', browsers_used: cd.browsers.length, max_browsers: cd.max_browsers });
 });
 
 // ==============================
@@ -107,21 +78,14 @@ app.post('/api/verify', (req, res) => {
   const { code, browser_id } = req.body;
   if (!code || !browser_id) return res.json({ valid: false });
 
-  const normalizedCode = code.toUpperCase().trim();
-  const hashedBrowser = hashId(browser_id);
+  const nc = code.toUpperCase().trim();
+  const hb = hashId(browser_id);
   const data = loadData();
-  const codeData = data.activation_codes[normalizedCode];
-  if (!codeData || !codeData.active) return res.json({ valid: false });
+  const cd = data.activation_codes[nc];
 
-  const browsers = (codeData.browsers || []).map(b =>
-    typeof b === 'object' && b.bid ? b.bid : b
-  );
+  if (!cd || !cd.active) return res.json({ valid: false });
 
-  return res.json({
-    valid: browsers.includes(hashedBrowser),
-    browsers_used: browsers.length,
-    max_browsers: codeData.max_browsers
-  });
+  return res.json({ valid: (cd.browsers || []).includes(hb) });
 });
 
 // ==============================
@@ -131,57 +95,53 @@ app.post('/api/deactivate', (req, res) => {
   const { code, browser_id } = req.body;
   if (!code || !browser_id) return res.status(400).json({ success: false });
 
-  const normalizedCode = code.toUpperCase().trim();
-  const hashedBrowser = hashId(browser_id);
+  const nc = code.toUpperCase().trim();
+  const hb = hashId(browser_id);
   const data = loadData();
-  const codeData = data.activation_codes[normalizedCode];
-  if (!codeData) return res.status(404).json({ success: false });
+  const cd = data.activation_codes[nc];
 
-  codeData.browsers = (codeData.browsers || [])
-    .map(b => typeof b === 'object' && b.bid ? b.bid : b)
-    .filter(b => b !== hashedBrowser);
+  if (!cd) return res.status(404).json({ success: false });
+  cd.browsers = (cd.browsers || []).filter(b => b !== hb);
   saveData(data);
 
   return res.json({ success: true });
 });
 
 // ==============================
-// ADMIN ROUTES
+// ADMIN
 // ==============================
-app.get('/admin/codes', (req, res) => {
-  if (req.headers['x-admin-key'] !== ADMIN_KEY) return res.status(403).json({ error: 'Unauthorized' });
-  const data = loadData();
-  const summary = {};
-  for (const [code, info] of Object.entries(data.activation_codes)) {
-    const browsers = (info.browsers || []).map(b => typeof b === 'object' && b.bid ? b.bid : b);
-    summary[code] = {
-      active: info.active,
-      browsers_used: browsers.length,
-      max_browsers: info.max_browsers,
-      created: info.created,
-      last_activated: info.last_activated || null
-    };
+function checkAdmin(req, res) {
+  if (req.headers['x-admin-key'] !== ADMIN_KEY) {
+    res.status(403).json({ error: 'Unauthorized' });
+    return false;
   }
-  res.json({ total: Object.keys(summary).length, codes: summary });
+  return true;
+}
+
+app.get('/admin/codes', (req, res) => {
+  if (!checkAdmin(req, res)) return;
+  const data = loadData();
+  const out = {};
+  for (const [code, info] of Object.entries(data.activation_codes)) {
+    out[code] = { active: info.active, browsers_used: (info.browsers||[]).length, max_browsers: info.max_browsers, created: info.created, last_activated: info.last_activated||null };
+  }
+  res.json({ total: Object.keys(out).length, codes: out });
 });
 
 app.post('/admin/add-code', (req, res) => {
-  if (req.headers['x-admin-key'] !== ADMIN_KEY) return res.status(403).json({ error: 'Unauthorized' });
+  if (!checkAdmin(req, res)) return;
   const { code, max_browsers } = req.body;
   if (!code) return res.status(400).json({ error: 'Code required' });
   const data = loadData();
   const nc = code.toUpperCase().trim();
   if (data.activation_codes[nc]) return res.status(409).json({ error: 'Already exists' });
-  data.activation_codes[nc] = {
-    active: true, browsers: [], max_browsers: max_browsers || 3,
-    created: new Date().toISOString().split('T')[0]
-  };
+  data.activation_codes[nc] = { active: true, browsers: [], max_browsers: max_browsers || 3, created: new Date().toISOString().split('T')[0] };
   saveData(data);
   res.json({ success: true, code: nc });
 });
 
 app.post('/admin/disable-code', (req, res) => {
-  if (req.headers['x-admin-key'] !== ADMIN_KEY) return res.status(403).json({ error: 'Unauthorized' });
+  if (!checkAdmin(req, res)) return;
   const data = loadData();
   const nc = req.body.code.toUpperCase().trim();
   if (!data.activation_codes[nc]) return res.status(404).json({ error: 'Not found' });
@@ -191,7 +151,7 @@ app.post('/admin/disable-code', (req, res) => {
 });
 
 app.post('/admin/reset-browsers', (req, res) => {
-  if (req.headers['x-admin-key'] !== ADMIN_KEY) return res.status(403).json({ error: 'Unauthorized' });
+  if (!checkAdmin(req, res)) return;
   const data = loadData();
   const nc = req.body.code.toUpperCase().trim();
   if (!data.activation_codes[nc]) return res.status(404).json({ error: 'Not found' });
@@ -200,6 +160,4 @@ app.post('/admin/reset-browsers', (req, res) => {
   res.json({ success: true });
 });
 
-app.listen(PORT, () => {
-  console.log(`\n🚀 OXOKE Activation Server v3.0 running on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`OXOKE Server v4.0 running on port ${PORT}`));
