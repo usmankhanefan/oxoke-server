@@ -87,7 +87,7 @@ app.post('/api/get-trial', (req, res) => {
 
   // নতুন trial তৈরি করি
   const trialKey = generateTrialKey();
-  const expiry = addDays(1); // ১ দিন
+  const expiry = new Date(Date.now() + 1 * 60 * 60 * 1000).toISOString(); // ১ ঘন্টা
 
   trials.used_pcs[hashedPc] = {
     key: trialKey,
