@@ -132,7 +132,9 @@ app.post('/api/activate', (req, res) => {
     cd.activated_at = new Date().toISOString();
     // Expiry set — আজ থেকে ৩০ দিন
     if (!cd.expiry) {
-      cd.expiry = addDays(30);
+      // expiry_ms দিয়ে exact মেয়াদ set করি (minutes/hours/days সব support)
+      const ms = cd.expiry_ms || ((cd.expiry_days || 30) * 24 * 60 * 60 * 1000);
+      cd.expiry = new Date(Date.now() + ms).toISOString();
     }
     saveData(data);
     return res.json({
@@ -228,20 +230,22 @@ app.get('/admin/trials', (req, res) => {
 
 app.post('/admin/add-code', (req, res) => {
   if (!checkAdmin(req, res)) return;
-  const { code, custom_expiry_days } = req.body;
+  const { code, expiry_ms, expiry_days, custom_expiry_days, expiry_label, key_type } = req.body;
   if (!code) return res.status(400).json({ error: 'Code required' });
   const data = loadData();
   const nc = code.toUpperCase().trim();
   if (data.activation_codes[nc]) return res.status(409).json({ error: 'Already exists' });
+  // expiry_ms (minutes/hours support) > expiry_days > default 30 days
+  const ms = expiry_ms || (expiry_days || custom_expiry_days || 30) * 24 * 60 * 60 * 1000;
   data.activation_codes[nc] = {
-    active: true,
-    locked_pc: null,
-    expiry: null, // expiry set হবে first activation এ
-    custom_expiry_days: custom_expiry_days || 30,
+    active: true, locked_pc: null, expiry: null,
+    expiry_ms: ms,
+    expiry_label: expiry_label || (Math.round(ms/86400000) + ' days'),
+    key_type: key_type || 'monthly',
     created: new Date().toISOString().split('T')[0]
   };
   saveData(data);
-  res.json({ success: true, code: nc });
+  res.json({ success: true, code: nc, expiry_label: expiry_label });
 });
 
 app.post('/admin/disable-code', (req, res) => {
