@@ -34,11 +34,15 @@ function saveTrials(data) { fs.writeFileSync(TRIAL_FILE, JSON.stringify(data, nu
 
 function loadConfig() {
   const d = loadData();
-  return { trial_duration_ms: d.trial_duration_ms || (2 * 60 * 60 * 1000) };
+  return {
+    trial_duration_ms: d.trial_duration_ms || (2 * 60 * 60 * 1000),
+    allow_retry_trial: d.allow_retry_trial || false
+  };
 }
 function saveConfig(cfg) {
   const d = loadData();
   d.trial_duration_ms = cfg.trial_duration_ms;
+  if (cfg.allow_retry_trial !== undefined) d.allow_retry_trial = cfg.allow_retry_trial;
   fs.writeFileSync(DATA_FILE, JSON.stringify(d, null, 2));
 }
 
@@ -87,7 +91,17 @@ app.post('/api/get-trial', (req, res) => {
         message: 'Trial reactivated.'
       });
     } else {
-      // Trial শেষ হয়ে গেছে
+      // Trial শেষ হয়ে গেছে — retry allowed?
+      const cfg = loadConfig();
+      if (cfg.allow_retry_trial) {
+        // Admin allowed retry — give fresh trial
+        const trialDurationMs = cfg.trial_duration_ms || (2 * 60 * 60 * 1000);
+        const newExpiry = new Date(Date.now() + trialDurationMs).toISOString();
+        const newKey = generateTrialKey();
+        trials.used_pcs[hashedPc] = { key: newKey, expiry: newExpiry, created: new Date().toISOString(), retried: true };
+        saveTrials(trials);
+        return res.json({ success: true, key: newKey, expiry: newExpiry, type: 'trial', duration_ms: trialDurationMs, message: 'Trial restarted by admin.' });
+      }
       return res.status(403).json({
         success: false,
         message: 'Free trial already used on this PC. Purchase a license: +8801811507607'
@@ -164,8 +178,26 @@ app.post('/api/admin/set-trial-duration', (req, res) => {
 });
 
 // ==============================
-// POST /api/activate
-// Monthly key — PC-locked
+// ADMIN: GET retry trial status
+// ==============================
+app.post('/api/admin/get-retry-trial', (req, res) => {
+  const { admin_key } = req.body;
+  if (admin_key !== ADMIN_KEY) return res.status(403).json({ success: false, message: 'Invalid admin key' });
+  const cfg = loadConfig();
+  return res.json({ success: true, allow_retry_trial: cfg.allow_retry_trial || false });
+});
+
+// ==============================
+// ADMIN: SET retry trial on/off
+// ==============================
+app.post('/api/admin/set-retry-trial', (req, res) => {
+  const { admin_key, allow_retry_trial } = req.body;
+  if (admin_key !== ADMIN_KEY) return res.status(403).json({ success: false, message: 'Invalid admin key' });
+  const cfg = loadConfig();
+  cfg.allow_retry_trial = !!allow_retry_trial;
+  saveConfig(cfg);
+  return res.json({ success: true, allow_retry_trial: cfg.allow_retry_trial });
+});PC-locked
 // ==============================
 app.post('/api/activate', (req, res) => {
   const { code, pc_fingerprint } = req.body;
