@@ -32,6 +32,16 @@ function loadTrials() {
 }
 function saveTrials(data) { fs.writeFileSync(TRIAL_FILE, JSON.stringify(data, null, 2)); }
 
+function loadConfig() {
+  const d = loadData();
+  return { trial_duration_ms: d.trial_duration_ms || (2 * 60 * 60 * 1000) };
+}
+function saveConfig(cfg) {
+  const d = loadData();
+  d.trial_duration_ms = cfg.trial_duration_ms;
+  fs.writeFileSync(DATA_FILE, JSON.stringify(d, null, 2));
+}
+
 function hashId(id) {
   return crypto.createHash('sha256').update(String(id)).digest('hex').slice(0, 16);
 }
@@ -87,7 +97,9 @@ app.post('/api/get-trial', (req, res) => {
 
   // নতুন trial তৈরি করি
   const trialKey = generateTrialKey();
-  const expiry = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(); // ২ ঘন্টা
+  const cfg = loadConfig();
+  const trialDurationMs = cfg.trial_duration_ms || (2 * 60 * 60 * 1000);
+  const expiry = new Date(Date.now() + trialDurationMs).toISOString();
 
   trials.used_pcs[hashedPc] = {
     key: trialKey,
@@ -103,6 +115,29 @@ app.post('/api/get-trial', (req, res) => {
     type: 'trial',
     message: 'Trial activated! Enjoy 24 hours of ad-free browsing.'
   });
+});
+
+// ==============================
+// ADMIN: GET trial config
+// ==============================
+app.post('/api/admin/trial-config', (req, res) => {
+  const { admin_key } = req.body;
+  if (admin_key !== ADMIN_KEY) return res.status(403).json({ success: false, message: 'Invalid admin key' });
+  const cfg = loadConfig();
+  return res.json({ success: true, trial_duration_ms: cfg.trial_duration_ms || (2 * 60 * 60 * 1000) });
+});
+
+// ==============================
+// ADMIN: SET trial duration
+// ==============================
+app.post('/api/admin/set-trial-duration', (req, res) => {
+  const { admin_key, duration_ms } = req.body;
+  if (admin_key !== ADMIN_KEY) return res.status(403).json({ success: false, message: 'Invalid admin key' });
+  if (!duration_ms || duration_ms < 60000) return res.status(400).json({ success: false, message: 'Minimum 60000ms (1 minute)' });
+  const cfg = loadConfig();
+  cfg.trial_duration_ms = duration_ms;
+  saveConfig(cfg);
+  return res.json({ success: true, message: 'Trial duration updated', trial_duration_ms: duration_ms });
 });
 
 // ==============================
