@@ -118,6 +118,14 @@ app.post('/api/get-trial', (req, res) => {
 });
 
 // ==============================
+// PUBLIC: GET trial duration (for extension display)
+// ==============================
+app.get('/api/trial-duration', (req, res) => {
+  const cfg = loadConfig();
+  return res.json({ success: true, duration_ms: cfg.trial_duration_ms || (2 * 60 * 60 * 1000) });
+});
+
+// ==============================
 // ADMIN: GET trial config
 // ==============================
 app.post('/api/admin/trial-config', (req, res) => {
