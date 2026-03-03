@@ -118,7 +118,21 @@ app.post('/api/get-trial', (req, res) => {
 });
 
 // ==============================
-// PUBLIC: GET trial duration (for extension display)
+// PUBLIC: CHECK if PC already used trial
+// ==============================
+app.post('/api/check-trial-status', (req, res) => {
+  const { pc_fingerprint } = req.body;
+  if (!pc_fingerprint) return res.json({ used: false });
+  const hashedPc = hashId(pc_fingerprint);
+  const trials = loadTrials();
+  const record = trials.used_pcs[hashedPc];
+  if (!record) return res.json({ used: false });
+  // Check if trial actually expired (not just used)
+  const expired = record.expiry && Date.now() > new Date(record.expiry).getTime();
+  return res.json({ used: expired, expiry: record.expiry || null });
+});
+
+
 // ==============================
 app.get('/api/trial-duration', (req, res) => {
   const cfg = loadConfig();
