@@ -364,6 +364,35 @@ body{min-height:100vh;background:var(--bg);color:var(--text);
     <div id="trialMsg" style="margin-top:10px;font-size:12px;min-height:18px;text-align:center;"></div>
   </div>
 
+  <!-- RETRY TRIAL -->
+  <div class="card">
+    <div class="card-title">
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+        <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>
+      </svg>
+      Free Trial Retry Control
+    </div>
+    <p style="font-size:12px;color:var(--muted);margin-bottom:16px;">এই অপশন <b>ON</b> করলে যাদের free trial শেষ হয়ে গেছে তারা আবার নতুন করে free trial পাবে। <b>OFF</b> করলে আবার বন্ধ হয়ে যাবে।</p>
+
+    <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
+      <!-- Toggle Switch -->
+      <div style="display:flex;align-items:center;gap:12px;">
+        <span style="font-size:13px;color:var(--muted);">Retry Trial:</span>
+        <label style="position:relative;display:inline-block;width:52px;height:28px;cursor:pointer;">
+          <input type="checkbox" id="retryTrialToggle" style="opacity:0;width:0;height:0;" onchange="setRetryTrial(this.checked)">
+          <span id="retrySlider" style="position:absolute;cursor:pointer;top:0;left:0;right:0;bottom:0;background:#333;border-radius:28px;transition:.3s;border:1.5px solid var(--border);">
+            <span id="retryKnob" style="position:absolute;height:20px;width:20px;left:3px;bottom:3px;background:var(--muted);border-radius:50%;transition:.3s;"></span>
+          </span>
+        </label>
+        <span id="retryStatusLabel" style="font-size:13px;font-weight:700;color:var(--muted);">Loading...</span>
+      </div>
+
+      <button class="btn btn-outline" onclick="loadRetryStatus()" style="font-size:11px;padding:6px 14px;">🔄 Refresh</button>
+    </div>
+
+    <div id="retryMsg" style="margin-top:12px;font-size:12px;min-height:18px;text-align:center;"></div>
+  </div>
+
   <!-- ACTIVITY LOG -->
   <div class="card">
     <div class="section-row" style="margin-bottom:14px;">
@@ -765,7 +794,57 @@ function setTrialPreset(days, hours, minutes) {
   document.getElementById('trialMinutes').value = minutes;
 }
 
-async function loadTrialDuration() {
+async function loadRetryStatus() {
+    const url = document.getElementById('serverUrl').value.trim();
+    const key = document.getElementById('adminKey').value.trim();
+    const msg = document.getElementById('retryMsg');
+    if (!url || !key) { if(msg){msg.textContent='⚠ Server URL ও Admin Key দিন';msg.style.color='var(--yellow)';}return; }
+    try {
+      const r = await fetch(url+'/api/admin/get-retry-trial',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({admin_key:key})});
+      const d = await r.json();
+      if (d.success) { applyRetryUI(d.allow_retry_trial); if(msg)msg.textContent=''; }
+      else { if(msg){msg.textContent='❌ '+d.message;msg.style.color='var(--red)';} }
+    } catch(e) { if(msg){msg.textContent='❌ Server connect failed';msg.style.color='var(--red)';} }
+  }
+
+  async function setRetryTrial(enabled) {
+    const url = document.getElementById('serverUrl').value.trim();
+    const key = document.getElementById('adminKey').value.trim();
+    const msg = document.getElementById('retryMsg');
+    const tog = document.getElementById('retryTrialToggle');
+    if (!url || !key) { if(tog)tog.checked=!enabled; if(msg){msg.textContent='⚠ Server URL ও Admin Key দিন';msg.style.color='var(--yellow)';}return; }
+    try {
+      const r = await fetch(url+'/api/admin/set-retry-trial',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({admin_key:key,allow_retry_trial:enabled})});
+      const d = await r.json();
+      if (d.success) {
+        applyRetryUI(d.allow_retry_trial);
+        if(msg){ msg.textContent = d.allow_retry_trial ? '✅ Retry Trial ON — Expired users can retry now' : '✅ Retry Trial OFF — Expired users blocked again'; msg.style.color = d.allow_retry_trial ? 'var(--green)' : 'var(--muted)'; }
+      } else { if(tog)tog.checked=!enabled; if(msg){msg.textContent='❌ '+d.message;msg.style.color='var(--red)';} }
+    } catch(e) { if(tog)tog.checked=!enabled; if(msg){msg.textContent='❌ Server connect failed';msg.style.color='var(--red)';} }
+  }
+
+  function applyRetryUI(isOn) {
+    const tog    = document.getElementById('retryTrialToggle');
+    const slider = document.getElementById('retrySlider');
+    const knob   = document.getElementById('retryKnob');
+    const label  = document.getElementById('retryStatusLabel');
+    if(!tog) return;
+    tog.checked = isOn;
+    if (isOn) {
+      slider.style.background='var(--green)'; slider.style.borderColor='var(--green)';
+      knob.style.background='#fff'; knob.style.transform='translateX(24px)';
+      label.textContent='ON'; label.style.color='var(--green)';
+    } else {
+      slider.style.background='#333'; slider.style.borderColor='var(--border)';
+      knob.style.background='var(--muted)'; knob.style.transform='translateX(0)';
+      label.textContent='OFF'; label.style.color='var(--muted)';
+    }
+  }
+
+  // Auto load retry status when page loads
+  window.addEventListener('load', () => setTimeout(loadRetryStatus, 800));
+
+  async function loadTrialDuration() {
   const url = document.getElementById('serverUrl').value.trim();
   const key = document.getElementById('adminKey').value.trim();
   const msg = document.getElementById('trialMsg');
