@@ -113,6 +113,7 @@ app.post('/api/get-trial', (req, res) => {
     key: trialKey,
     expiry: expiry,
     type: 'trial',
+    duration_ms: trialDurationMs,
     message: 'Trial activated! Enjoy 24 hours of ad-free browsing.'
   });
 });
