@@ -384,10 +384,10 @@ body{min-height:100vh;background:var(--bg);color:var(--text);
             <span id="retryKnob" style="position:absolute;height:20px;width:20px;left:3px;bottom:3px;background:var(--muted);border-radius:50%;transition:.3s;"></span>
           </span>
         </label>
-        <span id="retryStatusLabel" style="font-size:13px;font-weight:700;color:var(--muted);">Loading...</span>
+        <span id="retryStatusLabel" style="font-size:13px;font-weight:700;color:var(--muted);">—</span>
       </div>
 
-      <button class="btn btn-outline" onclick="loadRetryStatus()" style="font-size:11px;padding:6px 14px;">🔄 Refresh</button>
+      <button class="btn btn-outline" onclick="loadRetryStatus(true)" style="font-size:11px;padding:6px 14px;">🔄 Refresh</button>
     </div>
 
     <div id="retryMsg" style="margin-top:12px;font-size:12px;min-height:18px;text-align:center;"></div>
@@ -795,17 +795,20 @@ function setTrialPreset(days, hours, minutes) {
   document.getElementById('trialMinutes').value = minutes;
 }
 
-async function loadRetryStatus() {
+async function loadRetryStatus(manual=false) {
     const url = document.getElementById('serverUrl').value.trim();
     const key = document.getElementById('adminKey').value.trim();
     const msg = document.getElementById('retryMsg');
-    if (!url || !key) { return; } // silent — no key yet
+    if (!url || !key) { return; }
+    if(msg) msg.textContent = '';
     try {
       const r = await fetch(url+'/api/admin/get-retry-trial',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({admin_key:key})});
       const d = await r.json();
       if (d.success) { applyRetryUI(d.allow_retry_trial); if(msg)msg.textContent=''; }
-      else { if(msg){msg.textContent='❌ '+d.message;msg.style.color='var(--red)';} }
-    } catch(e) { if(msg){msg.textContent='❌ Server connect failed';msg.style.color='var(--red)';} }
+      else if(manual) { if(msg){msg.textContent='❌ '+d.message;msg.style.color='var(--red)';} }
+    } catch(e) {
+      if(manual && msg){msg.textContent='❌ Server connect failed';msg.style.color='var(--red)';}
+    }
   }
 
   async function setRetryTrial(enabled) {
