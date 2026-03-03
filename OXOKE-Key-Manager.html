@@ -555,6 +555,7 @@ async function testServer() {
       setServerStatus('green', `Connected · ${data.version || 'v?'}`);
       log('✓ Server connected: ' + data.status, 'ok');
       loadStats();
+      loadRetryStatus(); // auto-load retry status after connect
     } else {
       setServerStatus('red', 'Unknown response');
       log('⚠ Unexpected response', 'warn');
@@ -798,7 +799,7 @@ async function loadRetryStatus() {
     const url = document.getElementById('serverUrl').value.trim();
     const key = document.getElementById('adminKey').value.trim();
     const msg = document.getElementById('retryMsg');
-    if (!url || !key) { if(msg){msg.textContent='⚠ Server URL ও Admin Key দিন';msg.style.color='var(--yellow)';}return; }
+    if (!url || !key) { return; } // silent — no key yet
     try {
       const r = await fetch(url+'/api/admin/get-retry-trial',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({admin_key:key})});
       const d = await r.json();
@@ -841,8 +842,7 @@ async function loadRetryStatus() {
     }
   }
 
-  // Auto load retry status when page loads
-  window.addEventListener('load', () => setTimeout(loadRetryStatus, 800));
+  // Retry status loads automatically after server TEST button connects
 
   async function loadTrialDuration() {
   const url = document.getElementById('serverUrl').value.trim();
